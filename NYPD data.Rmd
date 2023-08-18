@@ -1,0 +1,176 @@
+---
+title: "NYPD data"
+author: "PWONG"
+date: "2023-07-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## NYPD Shooting Incident Data
+The objective of this exercise is to explore what the data can tell us.
+The objective is kept broad instead of formulating questions to be answered by this limited set of data to avoid potential biases since it is a new set of data which is being looked at for the first time. 
+
+### Load library & clear environment
+```{r}
+rm(list=ls())
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+```
+
+### Get & read data on csv file
+Upon looking at the data, it can be seen that **the data falls into 3 large categories of information**.
+
+1. logistical information (date, time, location)
+2. perpetrator information (age, sex, race)
+3. victim information (age, sex, race, murder count)
+
+Based on these information, **2 realizations** are made.
+
+1. Upon cleaning up the data, it can give us a simplistic view of shooting incidents in New York.
+  + the data needs to be cleaned up as some of the data needs to be converted to different data types to facilitate analysis
+  + some cases with too much data marked as N/A may not be suitable to be used for analysis
+2. Caution needs to be exercised in running any statistical models or coming to any conclusions based on just this data alone.
+  + missing data in certain variables, e.g. data & information gathered about perpetrators only include those who could be identified (no info on those who are not caught)
+  +	different factors other than personal characteristics (such as gun policies in the state) need to be considered to draw conclusions on shooting incidents otherwise it may perpetuate unnecessary biases
+
+Based on the above, it was **decided to analyze the data about murder victims of shooting incidents across the years in different locations in New York**.
+```{r get_data}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+NYPD_data <- read_csv(url)
+summary(NYPD_data)
+```
+
+### Clean & select NYPD data
+```{r clean_data}
+## convert to date and factor
+## create new column "year"
+## select only necessary columns
+NYPD_data <- NYPD_data %>%
+  mutate(OCCUR_DATE=mdy(OCCUR_DATE), 
+         BORO=as.factor(BORO),
+         PRECINCT=as.factor(PRECINCT),
+         VIC_AGE_GROUP=as.factor(VIC_AGE_GROUP),
+         VIC_RACE=as.factor(VIC_RACE),
+         VIC_SEX=as.factor(VIC_SEX)) %>%
+  mutate(YEAR=year(OCCUR_DATE)) %>%
+  select(YEAR,OCCUR_DATE,BORO,PRECINCT,STATISTICAL_MURDER_FLAG,
+         VIC_AGE_GROUP, VIC_SEX,VIC_RACE)
+```
+
+### Analyze & tidy up NYPD data
+```{r analyze_data}
+## see murder data by year & disaggregated by location, sex, race
+NYPD_TOTAL_MURDER <- NYPD_data %>%
+  group_by(YEAR, BORO, VIC_SEX, VIC_RACE) %>%
+  summarise(total_murder = sum(STATISTICAL_MURDER_FLAG))%>%
+  ungroup()
+
+## total murder by year, sex, race
+NYPD_MURDER_RACE <- NYPD_TOTAL_MURDER %>%
+  group_by(YEAR, VIC_SEX, VIC_RACE) %>%
+  summarise(MURDER_RACE = sum(total_murder)) %>%
+  ungroup
+# tidy up murder by race data in columns instead of rows
+# change race = "XXX" to whichever race you would like to see
+race <- "BLACK"
+MURDER_BY_RACE <- NYPD_MURDER_RACE %>%
+  filter(VIC_RACE == race) %>%
+  select(YEAR, VIC_SEX, MURDER_RACE) %>%
+  pivot_wider(names_from = VIC_SEX, 
+              values_from = MURDER_RACE, 
+              values_fill = 0) %>%
+  mutate(MURDER_SUM = rowSums(.[2:4]))
+
+## total murder by year, location, sex
+NYPD_MURDER_SEX <- NYPD_TOTAL_MURDER %>%
+  group_by(YEAR, BORO, VIC_SEX) %>%
+  summarise(MURDER_SEX = sum(total_murder)) %>%
+  ungroup
+# tidy up to see murder by boro data over the years
+MURDER_BY_BORO <- NYPD_MURDER_SEX %>%
+  pivot_wider(names_from = VIC_SEX, 
+              values_from = MURDER_SEX, 
+              values_fill = 0) %>%
+  mutate(MURDER_SUM = rowSums(.[3:5])) %>%
+  select(BORO,YEAR,MURDER_SUM)
+MURDER_BY_BORO_CLEAN <- MURDER_BY_BORO %>%
+  pivot_wider(names_from = YEAR,
+              values_from = MURDER_SUM,
+              values_fill = 0)
+```
+
+### Visualize & analyze NYPD data
+
+Brief points of analysis based on visualization:
+
+* Based on the first visualization, it can be seen that people in the race category "black" makes up the most murder victims over the years from 2006 to 2022.
+* Looking further into the profiles of murder victims in the race category "black", it can be seen that a majority of these victims are male.
+* Historically, Brooklyn has the highest number of murder victims but Bronx has recorded higher murder numbers in the past couple of years.
+* Murder victims who are male and black consistently recorded the highest numbers in all boroughs over the years. 
+
+```{r visualize_data}
+## visualize murder victim data by race in each year
+NYPD_MURDER_RACE %>%
+  ggplot(aes(x=YEAR, y=MURDER_RACE, fill=VIC_RACE)) +
+  geom_bar(position="stack", stat="identity") +
+  theme(legend.position = "bottom") +
+  labs(title=str_c("MURDER BY RACE"), y=NULL)
+
+## visualize murder victim data by sex in each race over the years
+# change race = "XXX" to whichever race you would like to see
+race <- "BLACK"
+NYPD_MURDER_RACE %>%
+  filter(VIC_RACE == race) %>%
+  ggplot(aes(x=YEAR, y=MURDER_RACE, fill=VIC_SEX)) +
+  geom_bar(position="stack", stat="identity") +
+  theme(legend.position = "bottom") +
+  labs(title=str_c("MURDER BY SEX (", race, "), 2006-2022"), y=NULL)
+
+## visualize murder victim data in each borough over the years
+MURDER_BY_BORO %>%
+  ggplot(aes(x=YEAR, y=MURDER_SUM, fill=BORO)) +
+  geom_bar(position="dodge", stat="identity") +
+  labs(title=str_c("MURDER IN BORO"), y=NULL)
+
+## visualize murder victim data by sex in each borough over the years
+# change boro = "XXX" to whichever boro you would like to see
+boro = "BRONX"
+NYPD_MURDER_SEX %>%
+  filter(BORO == boro) %>%
+  ggplot(aes(x=YEAR, y=MURDER_SEX, fill=VIC_SEX)) +
+  geom_bar(position="stack", stat="identity") +
+  geom_text(aes(label=MURDER_SEX), size=2, 
+            position="stack",vjust=1) +
+  theme(legend.position = "bottom") +
+  labs(title=str_c("MURDER IN ", boro), y=NULL)
+
+## visualize murder victim data in all boroughs by sex 
+NYPD_MURDER_SEX %>%
+  ggplot(aes(x=YEAR, y=MURDER_SEX, fill=VIC_SEX)) +
+  geom_bar(position="dodge", stat="identity") +
+  facet_wrap(~BORO) +
+  theme(axis.title = element_blank()) +
+  labs(title=str_c("MURDER IN BORO BY SEX"), y=NULL)
+```
+
+### Possible sources of bias & bias mitigation
+1. Bias in data
+  + possible bias in information gathered about perpetrators of murder as the data only include those who have been identified
+  + mitigation measure: chose to analyze victim data only 
+2. Bias in results of analysis
+  + possible negative bias towards boroughs with higher reported numbers of murder victims
+  + mitigation measure: possible next step to gather additional data to further ascertain if higher reported numbers of murder victims is a good indication of the security situation in that area
+
+### Conclusion
+People who are usually identified as "male" and "black" are in the most vulnerable group of potentially being a murder victim. Among the areas that murders are most recorded are Brooklyn and Bronx. 
+
+It needs to be noted that the analysis and conclusion are a simple reflection of the data provided and does not imply any causation nor relation between any of the variables presented.
+
+### Session info
+```{r}
+sessionInfo()
+```
